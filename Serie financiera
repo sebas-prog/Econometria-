@@ -1,0 +1,292 @@
+################################################################################################################
+### Tema: Series de tiempo financieras usando R ################################################################
+##              Curso: Métods númericos         ################################################################
+##  Alumno: Sebastián Sosa Pérez ###############################################################################
+## Correo: sebas12.ssp@gmail.com ###############################################################################
+# Descargar las series :
+
+  # Se llaman a los siguientes paquetes: 
+    library(tidyverse)
+    library(quantmod)
+    library(PerformanceAnalytics)
+    library(timeSeries)
+    library(hrbrthemes)
+    library(tseries)
+    library(forecast)
+    library(rugarch)
+    library(plotly)
+
+  # Se decargan los datos:
+
+    # Para este ejemplo se trabajara con la empresa Credicorp capital ("BAP") seria el ticker
+      getSymbols.yahoo("BAP",from="2015-1-1",to="2019-12-31",env = globalenv())
+      
+    # Se gráfica la serie de precios:    
+      candleChart(BAP,subset = "last 50 week",TA="addEMA(n=c(50,100,200));addSMI();addBBands();addVo();addSMA()",theme = "white",name="Credicorp")
+  
+  # Anilizar con las siguientes funciones creadas:
+    serie<- BAP$BAP.Adjusted
+    retornos<- Return.calculate(serie,method = "log")[-1]
+    # Con un análisis básico de la data
+  
+    statist=function(base=NULL){
+      cat("------------------------------------------ \n","Estadisticas basicas","\n")
+      cat("------------------------------------------ \n")
+      cat("Min: ",min(base),sep = "     ","\n")
+      cat("MAx: ",max(base),sep = "     ","\n")
+      cat("Kurtosis: ",kurtosis(base),sep = "     ","\n")
+      cat("Skew: ",skewness(base),sep = "     ","\n")
+      cat("Mean: ",mean(base),sep = "     ","\n")
+      cat("Std: ",sd(base),sep = "     ","\n")
+      cat("length: ",length(base),sep = "     ","\n")
+      cat("------------------------------------------ \n")
+    }
+    
+    statist(serie)
+    
+    # Hallando el valor en riesgo de la serie (VaR):
+    
+      # Usando la fórmula del paquete "Perfomanceanalycitys":
+    
+        VAR<- function(base=NULL,alpha=0.99){
+          cat("------------------------------------------ \n",sep="   ","Value at Risk","\n")
+          cat("------------------------------------------ \n")
+          cat("Min: ",min(base),sep = "     ","\n")
+          cat("MAx: ",max(base),sep = "     ","\n")
+          cat("Kurtosis: ",kurtosis(base),sep = "     ","\n")
+          cat("Skew: ",skewness(base),sep = "     ","\n")
+          cat("Mean: ",mean(base),sep = "     ","\n")
+          cat("Std: ",sd(base),sep = "     ","\n")
+          cat("length: ",length(base),sep = "     ","\n")
+          cat("------------------------------------------ \n")
+          cat("Valor en Riesgo: ",VaR(base,p=alpha,method = "gaussian"),sep="    ","\n")
+          cat("------------------------------------------ \n")
+        }
+        
+        VAR(retornos)
+      
+      # Método gráfico: 
+        
+        graphics<-function(base,p=0.99){
+          par.2<-VaR(base,p=p,method = "gaussian")
+          m=mean(base)
+          s=sd(base)
+          
+          data=data.frame("fechas"=index(base),
+                          "retornos"=as.data.frame(base))
+          
+          ggplot(data,aes(retornos))+geom_histogram(aes(
+            y=..density..
+          ),binwidth = 0.01,fill="blue",color="black",alpha=0.4)+geom_vline(xintercept = par.2,lty=2,
+                                                                            color="red")+
+            stat_function(fun = dnorm,args =
+                            list(mean=m,sd=s),col="red")+theme_modern_rc()+labs(title="VaR de los retornos")
+        }
+
+        graphics(retornos)        
+
+      # Comparación de la distribución de los retornos:
+        
+        distribucion<-function(retornos){
+          m=mean(retornos)
+          s=sd(retornos)
+          plot(density(retornos), main = "Retorno de Distribución Empírica") 
+          curve(dnorm(x, mean = m, sd = s), from = -0.1, to = 0.1, add = TRUE, col = 'blue')
+        }
+
+        distribucion(retornos)        
+    
+    # Elección del mejor ARMA(p,q):
+      
+      # Primero vemos el acf y el pacf para la elección de los rezagos: 
+        
+        revision<- function(serie=NULL,lag=30){
+          matriz=matrix(c(1,2,1,3),ncol = 2,nrow=2)
+          layout(matriz)
+          serie<- as.ts(serie)
+          plot(serie,main = "Retornos");grid()
+          acf(serie,lag.max = lag)
+          pacf(serie,lag.max = lag)
+          layout(1)
+        }
+        
+        revision(retornos)
+        # El mejor en base los gráficos es un ARMA(0,2)
+        
+        # Se crea un algortimo que me escoja el mejor modelo 
+        
+        forecast<-function(retornos=NULL,p=NULL,q=NULL){
+          datos<-NULL
+          indice<- NULL
+          ata1=NULL
+          for(i in p){
+            for(a in q){
+              ata<- summary(arma(retornos,order = c(i,a)))$aic
+              datos<- c(datos,ata)
+              atita<- paste(i,a)
+              indice<- c(indice,atita)
+              table<- data.frame("ARMA"=indice,"AIC"=datos)
+              ata1=table %>% arrange(AIC)
+            }
+          }
+          print("Esta función bota el menor AIC")
+          return(ata1[1,])
+        }
+        
+        forecast(retornos,p=1:5,q=1:5)
+        # Según este algoritmo el mejor modelo es un ARMA(2,2) este es mediante el criterio de AIC
+        
+        # Se validad el modelo 
+        
+        modelo<- arma(retornos,order = c(2,2))
+        
+        modelo<-function(retornos=NULL,orden=NULL,lag=30){
+          modelo1=retornos %>% arma(order = orden) %>% residuals()
+          modelo=na.omit(modelo1)
+          mat=matrix(c(1,2,4,1,3,4),ncol = 2,nrow = 3)
+          layout(mat)
+          plot(modelo,type = "l");title("Residuos del modelo")
+          acf(modelo,lag.max = lag)
+          pacf(modelo,lag.max = lag)
+          qqnorm(modelo);qqline(modelo)
+          layout(1)
+          }
+        
+        modelo(retornos,orden = c(2,2))
+        
+        # Se ve si es que este modelo presenta heteroestacidad: 
+        
+          ARCH<-function(retornos=NULL,orden=NULL,lag=30){
+            modelo1=retornos %>% arma(order = orden) %>% residuals()
+            modelo=na.omit(modelo1)**2
+            mat=matrix(c(1,2,4,1,3,4),ncol = 2,nrow = 3)
+            layout(mat)
+            plot(modelo,type = "l");title("Residuos del modelo")
+            acf(modelo,lag.max = lag)
+            pacf(modelo,lag.max = lag)
+            qqnorm(modelo);qqline(modelo)
+            layout(1)
+          }
+          
+          ARCH(retornos,orden=c(2,2))
+      
+        # Se crea un segundo algortimo el cual calcula de una manera más eficiente el modelo 
+          
+          omega_forecast=function(serie=NULL,lag.max=30,p.max=NULL,q.max=NULL){
+            ata=list()
+            ata2=NULL
+            ata3=NULL
+            for (i in seq(1,p.max)){
+              for (a in seq(1,q.max)){
+                ata[[paste("modelo",i,a,sep = " ")]]<-arma(serie,order = c(i,a))
+              }
+            }
+            for(h in 1:length(ata)){
+              otu= summary(ata[[h]])$aic
+              ata2<-c(ata2,otu)
+            }
+            ata3=as.data.frame(names(ata))
+            ata1=data.frame("modelo"=ata3,"AIC"=ata2)
+            daffy=ata1 %>% arrange(AIC)
+            atita=daffy[1,]
+            cat("------------------------------------------------------------ \n")
+            cat("             Resume del modelo \n")
+            cat("------------------------------------------------------------ \n")
+            print(summary(ata[[atita$names.ata.]]))
+            aa=ata[[atita$names.ata.]]
+            modelo_1<-function(retornos=NULL,lag=30){
+              modelo1=retornos %>% residuals()
+              modelo=na.omit(modelo1)
+              mat=matrix(c(1,2,4,1,3,4),ncol = 2,nrow = 3) 
+              layout(mat)
+              plot(modelo,type = "l");title("Residuos del modelo")
+              acf(modelo,lag.max = lag)
+              pacf(modelo,lag.max = lag)
+              qqnorm(modelo);qqline(modelo)
+              layout(1)
+            }
+            ARCH_1<-function(retornos=NULL,lag=30){
+              modelo1=retornos  %>% residuals()
+              modelo=na.omit(modelo1)**2
+              mat=matrix(c(1,2,4,1,3,4),ncol = 2,nrow = 3)
+              layout(mat)
+              plot(modelo,type = "l");title("Residuos del modelo")
+              acf(modelo,lag.max = lag)
+              pacf(modelo,lag.max = lag)
+              qqnorm(modelo);qqline(modelo)
+              layout(1)
+            }
+            modelo_1(aa,lag = lag.max)
+            ARCH_1(aa,lag = lag.max)
+          }
+          
+          omega_forecast(retornos,p.max = 5,q.max = 5)
+          
+        # Se cálcula el mejor modelo GARCH(p,q)
+          
+          garch.spec=list()
+          garch.fit=list()
+          garch.BIC=list()
+          for(i in 1:2){
+            for(a in 1:2){
+              garch.spec[[paste("garch",i,a,sep = "")]]<- ugarchspec(
+                variance.model=list(model="sGARCH", garchOrder=c(i,a)), 
+                mean.model=list(armaOrder=c(1,1)))
+              garch.fit[[paste("garch",i,a,sep = "")]]<- ugarchfit(spec =  garch.spec[[paste("garch",i,a,sep = "")]],
+                                                                   data = retornos)
+              garch.BIC[[paste("garch",i,a,sep = "")]]<-infocriteria( garch.fit[[paste("garch",i,a,sep = "")]])[2]
+            }
+          }
+          resulatados<- as.data.frame(garch.BIC)
+          colnames(resulatados[match(min(resulatados),resulatados)])
+          
+          # El mejo es un GARCH(1,1)
+          
+          plot(garch.fit$garch11)
+          
+          pro<- ugarchforecast(garch.fit$garch11,6)
+          plot(pro)          
+          modelo<- arima(serie,order = c(2,1,2))
+          pory<- forecast::forecast(modelo,6)
+          plot(pory)        
+          autoplot(pory)
+          matriz<- as.data.frame(pory$lower)          
+          tail(serie)
+          matriz1<- as.data.frame(pory$upper) 
+          fecha<- seq(as.Date("2019-12-31"),length=6,by="1 day")
+          matriz3<- as.data.frame(pory$mean)
+          ata=ggplot()+ geom_line(mapping = aes(x=index(serie[1200:length(serie)]),y=as.numeric(serie[1200:length(serie)])),color="#0000FF")+
+            geom_line(mapping = aes(x=fecha,y=matriz$`80%`,color="1"),lty=2,size=1)+
+            geom_line(mapping = aes(x=fecha,y=matriz$`95%`,color="2"),lty=2,size=1)+
+            geom_line(mapping = aes(x=fecha,y=matriz1$`80%`,color="1"),lty=2,size=1)+
+            geom_line(mapping = aes(x=fecha,y=matriz1$`95%`,color="2"),lty=2,size=1)+
+            geom_line(mapping = aes(x=fecha,y=matriz3$x,color="3"),size=1)+
+            scale_color_manual(" ",values = c("#58FAF4","#FF00FF","#FF0040"),labels=c("80%","95%","poryeccion"))+
+            theme_modern_rc()+xlab("Fechas")+ylab("Precios de las acciones")+labs(title = "Proyección de los precios de credicorp")
+          
+          ata+geom_ribbon(aes(ymin=matriz$`80%`,ymax=matriz1$`80%`,x=fecha),alpha=.3,fill="blue")+
+          geom_ribbon(aes(ymin=matriz$`95%`,ymax=matriz1$`95%`,x=fecha),alpha=.5,fill="blue")
+
+          
+  # Experimento:
+          # Descaragar los datos del índice EPU
+          
+                getSymbols.yahoo("EPU",,from="2015-1-1",to="2019-12-31",env = globalenv())
+          # Lo guardamos en un objeto: 
+                
+                serie1 <- EPU$EPU.Adjusted
+          # Vamos a crear un modelo ARMAX
+                
+              modelo1<- auto.arima(serie,xreg = serie1)
+              pred<- forecast::forecast(modelo1,xreg = serie1,h=10)
+              autoplot(pred)
+              mt<- as.data.frame(pred$lower)              
+              mt1<- as.data.frame(pred$upper)              
+              plot(modelo1$fitted)
+              lines(as.numeric(serie),col=2)
+              modelo<- Arima(serie,order = c(2,1,2))
+              plot(modelo$fitted)
+              lines(as.numeric(serie),col=2)              
+              oo<-arimax(serie,order = c(2,1,2),xreg = serie1)              
+        
+              
